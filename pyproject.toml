@@ -1,34 +1,39 @@
 [build-system]
-requires = ["hatchling"]
+requires      = ["hatchling", "packaging"]
 build-backend = "hatchling.build"
 
 [project]
-name = "oat-llm"
-dynamic = ["version"]
-description = 'Online AlignmenT (OAT) for LLMs.'
-readme = "README.md"
+name            = "oat-llm"
+dynamic         = ["version"]
+description     = "Online AlignmenT (OAT) for LLMs."
+readme          = "README.md"
 requires-python = "~=3.10"
-keywords = ["rlhf", "llm reasoning", "llm", "ai-alignment", "rl", "bandit", "ai", "sample-efficiency"]
+keywords        = [
+  "rlhf", "llm reasoning", "llm", "ai-alignment", "rl",
+  "bandit", "ai", "sample-efficiency"
+]
+
 authors = [
   { name = "Zichen Liu", email = "liuzc@sea.com" },
-  { name = "Xinyi Wan", email = "wanxy@sea.com" },
+  { name = "Xinyi Wan",   email = "wanxy@sea.com" },
   { name = "Changyu Chen", email = "chency@sea.com" },
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
-  "Programming Language :: Python",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
 ]
+
 dependencies = [
   "accelerate",
   "bitsandbytes",
+  "editables",
+  "hatchling",
   "datasets",
   "deepspeed==0.16.8",
   "dm-launchpad[tensorflow]",
   "einops",
-  "flash-attn==2.7.4.post1",
+  "flash-attn>=2.7.4.post1",
   "fire",
   "httpx",
   "jsonlines",
@@ -40,9 +45,14 @@ dependencies = [
   "packaging",
   "peft",
   "protobuf==3.20.0",
-  "pyarrow>=0.6.1,<12",
+  #"pyarrow>=0.6.1,<12",
+  "pyarrow>=11.0.0,<12",
   "python-Levenshtein==0.25.1",
+  "psutil",
   "scipy",
+  "torch==2.2.2     ; platform_system=='Linux'",
+  "torchvision==0.17.2 ; platform_system=='Linux'",
+  "torchaudio==0.17.2  ; platform_system=='Linux'",
   "torchmetrics",
   "tqdm",
   "tyro",
@@ -59,8 +69,8 @@ dependencies = [
 
 [project.urls]
 Documentation = "https://github.com/sail-sg/oat#readme"
-Issues = "https://github.com/sail-sg/oat/issues"
-Source = "https://github.com/sail-sg/oat"
+Issues        = "https://github.com/sail-sg/oat/issues"
+Source        = "https://github.com/sail-sg/oat"
 
 [project.license]
 text = "Apache-2.0"
