@@ -15,6 +15,16 @@
 * 21/03/2025: We incorporate [Dr. GRPO](https://github.com/sail-sg/understand-r1-zero), which fixes the optimization bias in GRPO.
 * 26/01/2025: We support reinforcement learning with verifiable rewards (RLVR) for math reasoning.
 * 20/10/2024: We open source Oat, an online LLM alignment framework developed during a research project on online LLM exploration ([sample-efficient alignment](https://arxiv.org/pdf/2411.01493)).
+## Get Started
+
+
+Make sure you have uv installed.
+```bash
+bash install_oat.sh
+```
+
+
+
 ## Introduction
 
 Oat 🌾 is a simple yet efficient framework for running **online** LLM alignment algorithms. Its key features include:
