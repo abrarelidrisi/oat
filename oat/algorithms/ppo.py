@@ -120,7 +120,7 @@ class PPOArgs(OATArgs):
         default="cal_few_shot_examples.json",
         metadata={"help": "Path to the JSON file with few-shot examples for the CAL."}
 
-
+    )
 class PPOActor(RewardActor):
 
     def step(
