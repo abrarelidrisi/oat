@@ -23,7 +23,7 @@ from datasets import load_dataset
 # --- Step 2: Define our custom arguments ---
 @dataclass
 class FGCArgs(PPOArgs):
-    cal_model_name: str = field(default="gemini-1.5-flash-latest")
+    cal_model_name: str = field(default="gemini-2.5-flash-latest")
     cal_few_shot_path: str = field(default="cal_few_shot_examples.json")
     negative_reward: float = field(default=-1.0)
     prompt_data_name: str = field(default="main")

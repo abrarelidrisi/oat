@@ -1,9 +1,7 @@
-# In oat/oracle/cal_oracle.py
-
 import os
 import json
 import torch
-from typing import List, Tuple # <--- CORRECTED: Added 'List' here
+from typing import List, Tuple
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from .base import RewardOracleBase
@@ -17,13 +15,11 @@ class CALOracle(RewardOracleBase):
 
         Args:
 
-        - cal_model_name: The name of the Gemini model to use (e.g., "gemini-1.5-flash").
+        - cal_model_name: The name of the Gemini model to use (e.g., "gemini-2.5-flash").
         - few_shot_path: Path to a JSON file containing few-shot examples.
         - api_key_env: The environment variable name for the API key.
 
         """
-
-        # Configure API key
 
         api_key = os.getenv(api_key_env)
 
@@ -32,7 +28,7 @@ class CALOracle(RewardOracleBase):
         genai.configure(api_key = api_key)
         
         # Set Configs for generation
-        generation_config = {"temperature": 0.0, "max_output_tokens": 150} 
+        generation_config = {"temperature": 1.0, "max_output_tokens": 150} 
 
         # Disable all safety filters to interfere with math/code problems
         safety_settings = [

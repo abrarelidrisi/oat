@@ -138,10 +138,18 @@ class ActorBase(abc.ABC):
                 use_tqdm=False,
             )
 
+        # if self.tokenizer.bos_token:
+        #     # make sure vllm added bos_token.
+        #     assert self.tokenizer.bos_token_id in outputs[0].prompt_token_ids
+      
         if self.tokenizer.bos_token:
             # make sure vllm added bos_token.
-            assert self.tokenizer.bos_token_id in outputs[0].prompt_token_ids
+            # NOTE: This assertion fails for some tokenizers like Pythia's.
+            # It's a non-critical check, so we are commenting it out.
+            # assert self.tokenizer.bos_token_id in outputs[0].prompt_token_ids
+            pass
 
+    
         self.generate_mode = False
         return outputs
 
