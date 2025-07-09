@@ -1,3 +1,6 @@
+```bash
+
+
 [build-system]
 requires      = ["hatchling", "packaging"]
 build-backend = "hatchling.build"
@@ -45,11 +48,15 @@ dependencies = [
   "packaging",
   "peft",
   "protobuf==3.20.0",
+  #"pyarrow>=0.6.1,<12",
   "pyarrow>=11.0.0,<12",
   "python-Levenshtein==0.25.1",
   "psutil",
   "scipy",
-  "torch==2.6.0",
+  "torch==2.2.2     ; platform_system=='Linux'",
+  "torchvision==0.17.2 ; platform_system=='Linux'",
+  "torchaudio==0.17.2  ; platform_system=='Linux'",
+  "torchmetrics",
   "tqdm",
   "tyro",
   "transformers==4.51.3",
@@ -60,7 +67,7 @@ dependencies = [
   "wheel",
   "numpy==1.26.4",
   "math-verify[antlr4_13_2]",
-  "pylatexenc==2.10"
+  "pylatexenc==2.10",
 ]
 
 [project.urls]
