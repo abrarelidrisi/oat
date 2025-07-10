@@ -30,7 +30,7 @@ bash scripts/install_oat.sh
 ```
 
 
-### Run cal experiment on math dataset
+### Run cal experiment on math dataset - you must have a gpu with compute capability of 8, an L4 for example
 ```bash
 python oat/experiment/cal.py \
     --gpus 1 \
