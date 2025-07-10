@@ -1,10 +1,7 @@
-# test_cal.py (version 5 - final bug-fixed version)
-
 import os
 from oat.oracles.cal_oracle import CALOracle
 import time
 
-# --- Define the test suite with authentic AIME/MATH problems ---
 test_cases = [
     {
         "question": "A regular octagon is inscribed in a circle of radius 1. Find the area of the octagon.",
@@ -42,23 +39,23 @@ def run_all_tests():
     print("--- Starting CALOracle Final Test (with Gemini) ---")
 
     if "GOOGLE_API_KEY" not in os.environ or not os.environ["GOOGLE_API_KEY"]:
-        print("❌ FATAL: GOOGLE_API_KEY environment variable not set.")
+        print("FATAL: GOOGLE_API_KEY environment variable not set.")
         return
 
     try:
         print("Instantiating CALOracle...")
         cal_oracle = CALOracle(
             cal_model_name="gemini-1.5-flash-latest",
-            few_shot_path="cal_few_shot_examples.json"
+            few_shot_path="scripts/cal_few_shot_examples.json"
         )
-        print("✅ Oracle instantiated successfully.\n")
+        print("Oracle instantiated successfully.\n")
     except Exception as e:
-        print(f"❌ FAILED to instantiate CALOracle: {e}")
+        print(f"FAILED to instantiate CALOracle: {e}")
         return
 
     passed_count = 0
     for i, case in enumerate(test_cases):
-        # --- MODIFIED FOR FULL OUTPUT ---
+
         print(f"--- Running Test {i+1}/{len(test_cases)} ---")
         print(f"  Question: {case['question']}")
         
@@ -73,10 +70,10 @@ def run_all_tests():
             error_segment = metric_output["cal_outputs"][0]["error_segment"]
 
         except KeyError:
-            print(f"❌ FAILED: Test case {i+1} is missing a required key.")
+            print(f"FAILED: Test case {i+1} is missing a required key.")
             continue
         except Exception as e:
-            print(f"❌ FAILED during API call for test {i+1}: {e}")
+            print(f"FAILED during API call for test {i+1}: {e}")
             continue
 
         clean_expected = expected_segment.strip().rstrip(',.')
@@ -86,17 +83,17 @@ def run_all_tests():
         print(f"  Actual:   '{clean_actual}'")
 
         if clean_expected == clean_actual:
-            print("  Result:   ✅ PASSED\n")
+            print("  Result:   PASSED\n")
             passed_count += 1
         else:
-            print("  Result:   ❌ FAILED\n")
+            print("  Result:   FAILED\n")
         
         time.sleep(1) 
 
     print("--- Test Summary ---")
     print(f"  {passed_count} / {len(test_cases)} tests passed.")
     if passed_count == len(test_cases):
-        print("🎉 All tests passed successfully! Phase 1 is complete.")
+        print("All tests passed successfully! Phase 1 is complete.")
     else:
         print("Review the failed tests.")
 

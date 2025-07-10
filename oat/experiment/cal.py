@@ -1,16 +1,7 @@
-# Copyright 2025 Garena Online Private Limited
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+
+import os
+os.environ['TRANSFORMERS_NO_TF'] = '1'
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
 import functools
 import itertools
@@ -18,21 +9,23 @@ import logging
 import time
 from dataclasses import dataclass, field
 from multiprocessing import Pool, TimeoutError
-from typing import Any, List, Literal, Tuple, Optional
+from typing import Any, List, Literal, Tuple, Optional, Dict
 
 import numpy as np
 import torch
 import tree
+
 from datasets import concatenate_datasets, load_from_disk,load_dataset
 from torch.utils.data import DataLoader
-
+from collections import defaultdict
 from oat.actors.base import ActorBase
 from oat.algorithms.ppo import PPOActor, PPOArgs, PPOLearner
 from oat.args import default_args_validation, get_default_args
 from oat.interface import get_program, lp
+from oat.oracles.cal_oracle import CALOracle
 from oat.oracles.base import PreferenceOracleBase, RewardOracleBase
 from oat.types import Metric, TrajectoryData
-from oat.utils.data import PromptDataset, load_data_from_disk_or_hf
+from oat.utils.data import PromptDataset, TrajectoryDataset, load_data_from_disk_or_hf
 from oat.utils.math_grader import (
     answer_tag_reward_fn,
     boxed_reward_fn,
@@ -110,7 +103,6 @@ class MATHOracle(RewardOracleBase, PreferenceOracleBase):
             incorrect_reward=incorrect_reward,
         )
         self.incorrect_reward = incorrect_reward
-        # Process pool is used to enable the timeout mechanism for answer grading in our distributed training setup.
         self.mp_pool = Pool(2)
 
     def get_reward(
@@ -120,7 +112,6 @@ class MATHOracle(RewardOracleBase, PreferenceOracleBase):
         references: List[str],
         batch_size: int = 4,
     ) -> Tuple[torch.Tensor, List[Any]]:
-        # Parameters used by Oat when using model-based reward, here we don't need.
         del inputs, batch_size
 
         rewards = []
@@ -158,47 +149,65 @@ class MATHOracle(RewardOracleBase, PreferenceOracleBase):
 
 
 @dataclass
-class ZeroMathArgs(PPOArgs):
-    # Template.
-    prompt_template: Literal["qwen_math", "no", "r1", "r1_distill_qwen"] = field(
-        default="qwen_math"
+class CALArgs(PPOArgs):
+    """
+    Our custom arguments, inheriting from PPOArgs to get all the standard
+    PPO settings, plus our new CAL-specific ones.
+    """
+    use_cal_oracle: bool = field(
+        default=False,
+        metadata={"help": "If True, use the custom Credit Assignment LLM Oracle."}
     )
-    # Evaluation benchmarks used.
-    test_split: str = "all"  # Use "aime,math" to only evaluate on selected benchmarks.
-    # Verifier.
-    verifier_version: Literal["fast", "math_verify"] = field(default="fast")
-    correct_reward: float = 1.0
-    incorrect_reward: float = 0.0
-    # Ablations.
-    remove_std_bias: bool = False
-    remove_len_bias: bool = False
-    # Data mixer
-    max_train: str = "999999"  # str separated by "," specifying the number of data.
-
-
+    cal_model_name: str = field(
+        default="gemini-1.5-flash-latest",
+        metadata={"help": "The model name for the CAL."}
+    )
+    cal_few_shot_path: str = field(
+        default="cal_examples.json",
+        metadata={"help": "Path to the JSON file with few-shot examples for the CAL."}
+    )
+    negative_reward: float = field(
+        default=-1.0,
+        metadata={"help": "The negative reward value assigned to the error segment."}
+    )
+    prompt_template: Literal["qwen_math", "r1", "r1_distill_qwen", "no"] = field(
+        default="no",
+        metadata={"help": "How to wrap each question before sending it to the model."}
+    )
 """
 3. Instantiate the actor based on Oat's PPOActor, which controls the reasoning trace generation (`self.sampling_params`) and the rewarding (`self.oracle`).
 """
 
 
-class ZeroMathActor(PPOActor):
+class CalActor(PPOActor): 
     def init(self, actor_id, save_path):
         super().init(actor_id, save_path)
+        
+        # This is the key change: we conditionally instantiate the oracle
+        if self.args.use_cal_oracle:
+            print("CalActor is using CALOracle.")
+            self.oracle = CALOracle(
+                cal_model_name=self.args.cal_model_name,
+                few_shot_path=self.args.cal_few_shot_path,
+            )
+        else:
+            # Fallback to the standard MATHOracle for baseline runs
+            print("CalActor is using standard MATHOracle.")
+            from oat.oracles.math import MATHOracle
+            self.oracle = MATHOracle(
+                template=self.args.prompt_template,
+                verifier_version=self.args.verifier_version,
+                correct_reward=self.args.correct_reward,
+                incorrect_reward=self.args.incorrect_reward,
+            )
 
-        self.oracle = MATHOracle(
-            template=args.prompt_template,
-            verifier_version=args.verifier_version,
-            correct_reward=args.correct_reward,
-            incorrect_reward=args.incorrect_reward,
-        )
 
-        if args.prompt_template in ["qwen_math", "no"]:
-            # These two templates are better used for Qwen models, which can themselves stop generation. Hence we unset all external stopping conditions.
+        if self.args.prompt_template in ["qwen_math", "no"]:
             self.sampling_params.stop = None
             self.sampling_params.stop_token_ids = None
             self.eval_sampling_params.stop = None
             self.eval_sampling_params.stop_token_ids = None
-        elif args.prompt_template == "r1":
+        elif self.args.prompt_template == "r1":
             # Let's stop when the model completes its answer.
             self.sampling_params.stop = ["</answer>"]
             self.sampling_params.include_stop_str_in_output = True
@@ -306,163 +315,135 @@ class ZeroMathActor(PPOActor):
 4. Instantiate the learner based on PPOLearner. Here we adapt the `evaluate` logic to run multiple math benchmarks.
 """
 
+class CalLearner(PPOLearner):
+    """
+    A custom PPOLearner that uses a Credit Assignment LLM (CAL) for
+    fine-grained credit assignment, replacing the standard PPO critic network.
+    """
 
-class ZeroMathLearner(PPOLearner):
-    def _init(self, args: ZeroMathArgs, actors: List[ActorBase]) -> None:
-        super()._init(args, actors)
-        # self.eval_dataset_dict = load_from_disk(args.eval_data)  # TODO: get fro HF.
-        self.eval_dataset_dict = load_dataset(args.eval_data)
-        if args.test_split != "all":
-            self.eval_dataset_dict = {
-                k: v for k, v in self.eval_dataset_dict.items() if k in args.test_split
-            }
+    def _init(self, args: CALArgs, actors: List[ActorBase]) -> None:
+        """
+        Initializes the CalLearner. We override this to PREVENT the
+        initialization of the critic network, saving memory and compute.
+        """
+
+        super(PPOLearner, self)._init(args, actors)
         self.args = args
-        self.args.max_queries = np.inf  # Disable early stop
-        # Dr. GRPO Modification 1: Remove length bias by using masked_sum with a constant normalizer:
+        self.dataset_builder = TrajectoryDataset
+
+        self.critic = None
+        logging.info("CalLearner initialized WITHOUT a critic network.")
+        
         self.masked_aggregator = (
             functools.partial(masked_sum, constant_normalizer=args.generate_max_length)
             if args.critic_type == "drgrpo"
             else masked_mean
         )
-        # Ablations
-        if args.critic_type in ["grpo", "ppo"] and args.remove_len_bias:
-            self.masked_aggregator = functools.partial(
-                masked_sum, constant_normalizer=args.generate_max_length
-            )
 
-    # Dr. GRPO Modification 2: Remove difficulty bias by just computing the MC advantage without dividing by std:
-    def compute_monte_carlo_advantages(self, rewards, response_masks):
-        rewards = rewards.sum(-1)
-        # Compute monte carlo trajectory-level advantage
-        values = rewards.view(-1, self.args.num_samples).mean(dim=1)
-        values = values.repeat_interleave(self.args.num_samples, dim=0)
-        advantages = rewards - values
-        if (self.args.critic_type == "grpo") and (not self.args.remove_std_bias):
-            # Additionally normalize by std.
-            std_grouped_rewards = rewards.view(-1, self.args.num_samples).std(dim=1)
-            std_grouped_rewards = std_grouped_rewards.repeat_interleave(
-                self.args.num_samples, dim=0
-            )
-            advantages = advantages / (std_grouped_rewards + 1e-8)
-        return advantages
+    def _map_segment_to_token_indices(self, response_ids: List[int], error_segment: str) -> tuple[int, int]:
+        """
+        A helper function to map a string segment to token indices in a full token sequence.
+        This is a non-trivial but crucial part of the implementation.
+        """
+        if not error_segment:
+            return -1, -1
 
-    def _apply_template(self, example):
-        problem = example[self.args.input_key]
-        example[self.args.input_key] = TEMPLATE_FACTORY[args.prompt_template](problem)
-        return example
+        segment_token_ids = self.tokenizer.encode(error_segment, add_special_tokens=False)
 
-    def prepare_data(self, strategy, tokenizer):
-        data_sources = self.args.prompt_data.split(",")
-        data_count = self.args.max_train.split(",")
-        assert len(data_sources) == len(data_count)
+        for i in range(len(response_ids) - len(segment_token_ids) + 1):
+            window = response_ids[i : i + len(segment_token_ids)]
+            if window == segment_token_ids:
+                return i, i + len(segment_token_ids)
 
-        prompts_data_list = []
-        for s, c in zip(data_sources, data_count):
-            # prompt_dataset = load_data_from_disk_or_hf(s)
-            prompt_dataset = load_dataset(s)
-            dataset_len = len(prompt_dataset[args.train_split])
-            prompts_data = (
-                prompt_dataset[args.train_split]
-                .select(range(min(int(c), dataset_len)))
-                .select_columns([args.input_key, args.output_key])
-            )
-            prompts_data_list.append(prompts_data)
+        logging.warning(f"CalLearner: Could not find exact token match for segment: '{error_segment}'")
+        return -1, -1
 
-        prompts_data = concatenate_datasets(prompts_data_list)
+    def compute_advantages_with_cal(self, trajectory: Dict) -> torch.Tensor:
+        """
+        This is our new, core advantage calculation logic.
+        It creates a sparse advantage tensor based on the CAL's output.
+        """
+        device = torch.cuda.current_device()
+        advantages = []
+        
+        oracle_infos = trajectory["info"]
 
-        # Prepare the data: templated questions & gt final answers.
-        prompts_data = prompts_data.map(lambda x: self._apply_template(x))
+        for i in range(len(trajectory["input_ids"])):
+            response_ids = trajectory["response_ids"][i]
+            per_token_advantage = torch.zeros(len(response_ids), device=device)
+            
+            error_segment = oracle_infos[i].get("cal_error_segment", "")
 
-        self.prompts_dataset = PromptDataset(
-            prompts_data,
-            tokenizer,
-            strategy,
-            input_key=args.input_key,
-            output_key=args.output_key,
-            apply_chat_template=False,  # Because we have applied already.
-            get_reference=True,
-        )
-        self.prompts_dataloader = strategy.setup_dataloader(
-            self.prompts_dataset,
-            strategy.args.rollout_batch_size_per_device,
-            pin_memory=True,
-            shuffle=True,
-        )
-        self.eval_prompts_dataset = self.eval_prompts_dataloader = (
-            None  # We use our own `self.eval_dataset_dict`.
-        )
+            if error_segment:
+                start_tok_idx, end_tok_idx = self._map_segment_to_token_indices(response_ids, error_segment)
 
-    # def eval_dataloader_collate_fn(self, item_list):
-    #     problems = []
-    #     formatted_problems = []
-    #     answers = []
-    #     for item in item_list:
-    #         problems.append(item["problem"])
-    #         formatted_problems.append(
-    #             TEMPLATE_FACTORY[args.prompt_template](item["problem"])
-    #         )
-    #         answers.append(item["answer"])
-    #     return formatted_problems, problems, answers
-    def eval_dataloader_collate_fn(self, item_list):
-        problems = []
-        formatted_problems = []
-        answers = []
-        # Get the correct keys from the command-line arguments
-        input_key = self.args.eval_input_key or self.args.input_key
-        output_key = self.args.eval_output_key or self.args.output_key
+                if start_tok_idx != -1:
+                    num_error_tokens = max(1, end_tok_idx - start_tok_idx)
+                    penalty_per_token = self.args.negative_reward / num_error_tokens
+                    per_token_advantage[start_tok_idx:end_tok_idx] = penalty_per_token
+            
+            advantages.append(per_token_advantage)
 
-        for item in item_list:
-            # Use the variables instead of hard-coded strings
-            problems.append(item[input_key])
-            formatted_problems.append(
-                TEMPLATE_FACTORY[self.args.prompt_template](item[input_key])
-            )
-            answers.append(item[output_key])
-        return formatted_problems, problems, answers
-    
-    def evaluate(self, dataloader, steps):
-        # Discard the default eval dataloader, and run eval on multiple benchmarks.
-        del dataloader
-        all_metrics = {}
-        accuracies = []
-        scores = []
-        lens = []
-        for benchmark_name, dataset in self.eval_dataset_dict.items():
-            eval_prompts_dataloader = DataLoader(
-                dataset,
-                batch_size=self.args.eval_batch_size,
-                shuffle=False,
-                drop_last=False,
-                collate_fn=self.eval_dataloader_collate_fn,
-            )
-            metrics = super().evaluate(
-                eval_prompts_dataloader, f"{steps}_{benchmark_name}"
-            )
-            all_metrics.update(
-                {
-                    k.replace("eval/", f"eval/{benchmark_name}/"): v
-                    for k, v in metrics.items()
-                }
-            )
-            accuracies.append(metrics["eval/accuracy"])
-            scores.append(metrics["eval/score"])
-            lens.append(metrics["eval/response_tok_len"])
-        all_metrics.update(
-            {
-                "eval/average/accuracy": np.mean(accuracies),
-                "eval/average/score": np.mean(scores),
-                "eval/average/response_tok_len": np.mean(lens),
-            }
-        )
-        return all_metrics
+        return torch.nn.utils.rnn.pad_sequence(advantages, batch_first=True, padding_value=0.0).to(device)
 
 
-def run_zero_math_rl(args: ZeroMathArgs):
-    # Define a distributed program that composes Actors and Learners.
+    def learning_step(self, trajectory: Dict) -> Dict:
+        """
+        This is the main override of the PPO learning step. It orchestrates the
+        entire process for a single batch of data using our CAL-based advantages.
+        """
+        args: CALArgs = self.args
+        device = torch.cuda.current_device()
+
+        input_ids = trajectory["input_ids"].to(device)
+        att_mask = trajectory["attention_mask"].to(device)
+        logps = torch.tensor(trajectory["response_logprobs"]).to(device)
+        loss_masks = torch.tensor(trajectory["loss_masks"]).float().to(device)
+        completion_masks = self.get_completion_mask(att_mask, trajectory["prompt_ids_lens"])
+        response_masks = completion_masks[:, 1:]
+
+        advantages = self.compute_advantages_with_cal(trajectory)
+
+        stats = defaultdict(list)
+        for _ in range(args.num_ppo_epochs):
+            batch_inds = np.random.permutation(len(input_ids))
+            for b_st in range(0, len(input_ids), args.train_batch_size_per_device):
+                mini_batch_inds = batch_inds[b_st : b_st + args.train_batch_size_per_device]
+
+                mb_advantage = advantages[mini_batch_inds]
+                mb_input_ids = input_ids[mini_batch_inds]
+                mb_att_mask = att_mask[mini_batch_inds]
+                mb_response_masks = response_masks[mini_batch_inds]
+                mb_logps = logps[mini_batch_inds]
+                mb_loss_masks = loss_masks[mini_batch_inds]
+
+                logits = self.model(mb_input_ids, attention_mask=mb_att_mask)["logits"].float()
+                new_logps = self.get_batch_logps(logits, mb_input_ids, mb_response_masks)
+
+                logprobs_diff = new_logps - mb_logps
+                ratio = torch.exp(logprobs_diff)
+                pg_losses = -mb_advantage * ratio
+                pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+                
+                pg_loss_max = torch.max(pg_losses, pg_losses2)
+                
+                pg_loss = self.masked_aggregator(pg_loss_max, mb_response_masks, axis=1)
+                loss = (pg_loss * mb_loss_masks).mean()
+
+                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+        
+        infos = {
+            "train/cal_loss": loss.detach().cpu().item(),
+            "train/advantage_mean": advantages.mean().cpu().item(),
+            "train/advantage_std": advantages.std().cpu().item(),
+        }
+        return infos
+
+def run_cal_rl(args: CALArgs):
     program, local_resources = get_program(
-        args, learner_cls=ZeroMathLearner, actor_cls=ZeroMathActor
+        args, learner_cls=CalLearner, actor_cls=CalActor
     )
-    # Launch the program in a local, multi-processing way!
     lp.launch(
         program,
         launch_type=args.launch_type,
@@ -470,12 +451,78 @@ def run_zero_math_rl(args: ZeroMathArgs):
         terminal="current_terminal",
     )
 
-
 if __name__ == "__main__":
-    args: ZeroMathArgs = get_default_args(ZeroMathArgs)
-    # Customization:
+    args: CALArgs = get_default_args(CALArgs)
     args.algo = "PPO"
     args.online_evaluation = True  # Use GT answer for online verification.
 
     args = default_args_validation(args)
-    run_zero_math_rl(args)
+    run_cal_rl(args)
+
+"""
+
+python oat/experiment/cal.py \
+    --gpus 1 \
+    --launch_type local_mt \
+    --collocate \
+    --vllm_sleep \
+    --pretrain EleutherAI/pythia-160m \
+    --prompt_data lkevinzc/gsm8k \
+    --train_split "train" \
+    --input_key question \
+    --output_key answer \
+    --max_train 128 \
+    --use_cal_oracle \
+    --prompt_template qwen_math \
+    --cal_model_name "gemini-1.5-flash-latest" \
+    --cal_few_shot_path "scripts/cal_few_shot_examples.json" \
+    --num_prompt_epoch 1 \
+    --max_sgd_steps 2 \
+    --rollout_batch_size 16 \
+    --train_batch_size_per_device 4
+
+python oat/experiment/cal.py \
+    --gpus 1 \
+    --launch_type local_mt \
+    --collocate \
+    --vllm_sleep \
+    --pretrain EleutherAI/pythia-160m \
+    --prompt_data lkevinzc/gsm8k \
+    --train_split "train" \
+    --input_key question \
+    --output_key answer \
+    --max_train 128 \
+    --use_cal_oracle \
+    --prompt_template qwen_math \
+    --cal_model_name "gemini-1.5-flash-latest" \
+    --cal_few_shot_path "scripts/cal_few_shot_examples.json" \
+    --num_prompt_epoch 1 \
+    --max_sgd_steps 2 \
+    --rollout_batch_size 16 \
+    --train_batch_size_per_device 4
+
+python oat/experiment/cal.py \
+    --gpus 1 \
+    --pretrain "deepseek-ai/deepseek-coder-1.3b-instruct" \
+    --critic_pretrain "deepseek-ai/deepseek-coder-1.3b-instruct" \
+    --prompt_data "lkevinzc/gsm8k" \
+    --train_split "train" \
+    --eval_data "lkevinzc/gsm8k" \
+    --eval_split "test" \
+    --use_cal_oracle=False \
+    ... # other training parameters for a full run
+
+
+
+python oat/experiment/cal.py \
+    --gpus 1 \
+    --pretrain "deepseek-ai/deepseek-coder-1.3b-instruct" \
+    --prompt_data "lkevinzc/gsm8k" \
+    ...
+    --use_cal_oracle=True \
+    --cal_model_name "gemini-1.5-flash-latest" \
+    --cal_few_shot_path "scripts/cal_few_shot_examples.json" \
+    ...
+
+
+"""

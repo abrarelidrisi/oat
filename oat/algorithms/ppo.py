@@ -117,7 +117,7 @@ class PPOArgs(OATArgs):
     )
     
     cal_few_shot_path: str = field(
-        default="cal_few_shot_examples.json",
+        default="scripts/cal_few_shot_examples.json",
         metadata={"help": "Path to the JSON file with few-shot examples for the CAL."}
 
     )
@@ -127,7 +127,7 @@ class PPOActor(RewardActor):
         self,
         prompts: List[str],
         formatted_prompts: List[str],
-        references: List[str] = None,
+        references: Optional[List[str]] = None,
     ) -> List[TrajectoryData]:
         assert not self.eval_mode
         info = {}
