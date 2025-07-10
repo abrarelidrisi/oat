@@ -18,13 +18,41 @@
 ## Get Started
 
 
-Make sure you have uv installed.
+Make sure you have uv installed. 
+- to install uv on linux
 ```bash
-bash install_oat.sh
+# On macOS and Linux.
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+then make sure you have python 3.10 installed and run the script below
+```bash
+bash scripts/install_oat.sh
 ```
 
 
+### Run cal experiment on math dataset
+```bash
+python oat/experiment/cal.py \
+    --gpus 1 \
+    --launch_type local_mt \
+    --collocate \
+    --vllm_sleep \
+    --pretrain EleutherAI/pythia-160m \
+    --prompt_data lkevinzc/gsm8k \
+    --train_split "train" \
+    --input_key question \
+    --output_key answer \
+    --max_train 128 \
+    --use_cal_oracle \
+    --prompt_template qwen_math \
+    --cal_model_name "gemini-1.5-flash-latest" \
+    --cal_few_shot_path "scripts/cal_few_shot_examples.json" \
+    --num_prompt_epoch 1 \
+    --max_sgd_steps 2 \
+    --rollout_batch_size 16 \
+    --train_batch_size_per_device 4
 
+```
 ## Introduction
 
 Oat 🌾 is a simple yet efficient framework for running **online** LLM alignment algorithms. Its key features include:

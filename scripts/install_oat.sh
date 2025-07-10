@@ -2,7 +2,7 @@
 set -e
 
 echo "remove old environments"
-rm -rf .venv build dist *.egg-info **/__pycache__ .oat
+rm -rf build dist *.egg-info **/__pycache__ .oat
 
 python3.10 -m venv .oat && source .oat/bin/activate
 python -m pip install -U pip && pip install uv
