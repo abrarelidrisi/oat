@@ -103,7 +103,6 @@ class MATHOracle(RewardOracleBase, PreferenceOracleBase):
             incorrect_reward=incorrect_reward,
         )
         self.incorrect_reward = incorrect_reward
-        self.mp_pool = Pool(2)
 
     def get_reward(
         self,
@@ -117,14 +116,9 @@ class MATHOracle(RewardOracleBase, PreferenceOracleBase):
         rewards = []
         infos = []
         for resp, ref in zip(responses, references):
-            res = self.mp_pool.apply_async(self.math_reward_fn, (resp, ref))
-            try:
-                info, r = res.get(timeout=1)
-                rewards.append(r)
-                infos.append(info)
-            except TimeoutError:
-                rewards.append(self.incorrect_reward)
-                infos.append({"formatted": False})
+            info, r = self.math_reward_fn(resp, ref)
+            rewards.append(r)
+            infos.append(info)
 
         return torch.tensor(rewards), infos
 
@@ -181,18 +175,19 @@ class CALArgs(PPOArgs):
 
 class CalActor(PPOActor): 
     def init(self, actor_id, save_path):
+        logging.info(f"--- [CalActor {actor_id}, PID: {os.getpid()}] Starting init ---")
         super().init(actor_id, save_path)
-        
+
         # This is the key change: we conditionally instantiate the oracle
         if self.args.use_cal_oracle:
-            print("CalActor is using CALOracle.")
+            logging.info(f"--- [CalActor {actor_id}, PID: {os.getpid()}] Initializing CALOracle... ---")
             self.oracle = CALOracle(
                 cal_model_name=self.args.cal_model_name,
                 few_shot_path=self.args.cal_few_shot_path,
             )
         else:
             # Fallback to the standard MATHOracle for baseline runs
-            print("CalActor is using standard MATHOracle.")
+            logging.info(f"--- [CalActor {actor_id}, PID: {os.getpid()}] Initializing standard MATHOracle... ---")
             from oat.oracles.math import MATHOracle
             self.oracle = MATHOracle(
                 template=self.args.prompt_template,
@@ -200,7 +195,14 @@ class CalActor(PPOActor):
                 correct_reward=self.args.correct_reward,
                 incorrect_reward=self.args.incorrect_reward,
             )
-
+         # After the oracle is ready, signal that this actor is ready to proceed.
+        # if torch.distributed.is_initialized():
+        #     torch.distributed.barrier()
+        # logging.info(f"--- [CalActor {actor_id}, PID: {os.getpid()}] Oracle initialized. ---")
+        
+        # After the oracle is ready, signal that this actor is ready to proceed.
+        # Do not add a barrier here as it will cause a deadlock.
+        # The synchronization should be handled by the learner process.
 
         if self.args.prompt_template in ["qwen_math", "no"]:
             self.sampling_params.stop = None
@@ -222,8 +224,8 @@ class CalActor(PPOActor):
     ) -> List[TrajectoryData]:
         """Main logic for the actor to generate trajectories (reasoning traces)."""
         assert not self.eval_mode
+        logging.info(f"--- [CalActor, PID: {os.getpid()}] Entered step method. ---")
         info = {}
-        logging.info(f"actor start")
 
         # step 1. generate
         st = time.time()
@@ -271,7 +273,7 @@ class CalActor(PPOActor):
         )
 
         info["actor/verify_time"] = time.time() - st
-        logging.info(f"actor reward {rewards.mean()}")
+        logging.info(f"actor dummy reward {rewards.mean()}")
         info["actor/rewards"] = rewards.mean().item()
         info["actor/num_data"] = rewards.numel()
         info["actor/formatted"] = np.mean([i["formatted"] for i in oracle_infos])
@@ -283,6 +285,8 @@ class CalActor(PPOActor):
         no_eos = np.array(no_eos).reshape(len(prompts), -1)
         info["actor/no_eos_count"] = no_eos.sum()
 
+        # Reshape oracle_infos to match the (prompts, num_samples) structure
+        oracle_infos = np.array(oracle_infos).reshape(len(prompts), -1)
         trajectory_data = []
         for i in range(len(candidates)):
             prompt = prompts[i]
@@ -303,7 +307,7 @@ class CalActor(PPOActor):
                         response_logprobs=response_logprobs[i][j],
                         rewards=dense_rewards,
                         loss_mask=not no_eos[i][j] if self.args.ignore_no_eos else True,
-                        info=info,
+                        info=oracle_infos[i][j],
                     )
                 )
         logging.info(f"actor finished data_len={len(trajectory_data)}")
@@ -366,7 +370,10 @@ class CalLearner(PPOLearner):
         device = torch.cuda.current_device()
         advantages = []
         
-        oracle_infos = trajectory["info"]
+        # In the learner, 'info' is a list of dictionaries, one for each item in the batch.
+        # The key is likely 'cal_outputs' if coming from CALOracle, or other keys if from MATHOracle.
+        # Let's handle both cases gracefully.
+        oracle_infos = trajectory.get("info", [])
 
         for i in range(len(trajectory["input_ids"])):
             response_ids = trajectory["response_ids"][i]
@@ -444,19 +451,23 @@ def run_cal_rl(args: CALArgs):
     program, local_resources = get_program(
         args, learner_cls=CalLearner, actor_cls=CalActor
     )
+    logging.info(f"--- [Main, PID: {os.getpid()}] Program created. Handing off to launchpad... ---")
     lp.launch(
         program,
         launch_type=args.launch_type,
         local_resources=local_resources,
         terminal="current_terminal",
     )
+    logging.info(f"--- [Main, PID: {os.getpid()}] launchpad has returned. Program finished. ---")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.info(f"--- [Main, PID: {os.getpid()}] Script started. Parsing arguments... ---")
     args: CALArgs = get_default_args(CALArgs)
     args.algo = "PPO"
     args.online_evaluation = True  # Use GT answer for online verification.
-
     args = default_args_validation(args)
+    logging.info(f"--- [Main, PID: {os.getpid()}] Arguments parsed. Calling run_cal_rl... ---")
     run_cal_rl(args)
 
 """
